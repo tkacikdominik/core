@@ -1,4 +1,6 @@
 """The test for the Facebook notify module."""
+from hypothesis import given
+from hypothesis.strategies import characters, composite, from_regex, text
 import pytest
 import requests_mock
 
@@ -91,30 +93,68 @@ async def test_send_message_attachment(hass, facebook):
         expected_params = {"access_token": ["page-access-token"]}
         assert mock.last_request.qs == expected_params
 
-    async def test_send_targetless_message(hass, facebook):
-        """Test sending a message without a target."""
-        with requests_mock.Mocker() as mock:
-            mock.register_uri(requests_mock.POST, fb.BASE_URL, status_code=200)
 
-            facebook.send_message(message="going nowhere")
-            assert not mock.called
+async def test_send_targetless_message(hass, facebook):
+    """Test sending a message without a target."""
+    with requests_mock.Mocker() as mock:
+        mock.register_uri(requests_mock.POST, fb.BASE_URL, status_code=200)
 
-    async def test_send_message_with_400(hass, facebook):
-        """Test sending a message with a 400 from Facebook."""
-        with requests_mock.Mocker() as mock:
-            mock.register_uri(
-                requests_mock.POST,
-                fb.BASE_URL,
-                status_code=400,
-                json={
-                    "error": {
-                        "message": "Invalid OAuth access token.",
-                        "type": "OAuthException",
-                        "code": 190,
-                        "fbtrace_id": "G4Da2pFp2Dp",
-                    }
-                },
-            )
-            facebook.send_message(message="nope!", target=["+15555551234"])
-            assert mock.called
-            assert mock.call_count == 1
+        facebook.send_message(message="going nowhere")
+        assert not mock.called
+
+
+async def test_send_message_with_400(hass, facebook):
+    """Test sending a message with a 400 from Facebook."""
+    with requests_mock.Mocker() as mock:
+        mock.register_uri(
+            requests_mock.POST,
+            fb.BASE_URL,
+            status_code=400,
+            json={
+                "error": {
+                    "message": "Invalid OAuth access token.",
+                    "type": "OAuthException",
+                    "code": 190,
+                    "fbtrace_id": "G4Da2pFp2Dp",
+                }
+            },
+        )
+        facebook.send_message(message="nope!", target=["+15555551234"])
+        assert mock.called
+        assert mock.call_count == 1
+
+
+@composite
+def random_individual_strategy(draw):
+    message = draw(
+        text(
+            characters(max_codepoint=1000, blacklist_categories=("Cc", "Cs")),
+            min_size=1,
+        )
+    )
+    phone_number = draw(from_regex("^09[0-9]{2}[1-9]{6}", False))
+    return message, phone_number
+
+
+@given(random_individual_strategy())
+async def test_strategy(hass, facebook, data):
+    msg, phone_number = data
+    with requests_mock.Mocker() as mock:
+        mock.register_uri(requests_mock.POST, fb.BASE_URL, status_code=200)
+
+        target = [phone_number]
+
+        facebook.send_message(message=msg, target=target)
+        assert mock.called
+        assert mock.call_count == 1
+
+        expected_body = {
+            "recipient": {"phone_number": target[0]},
+            "message": {"text": msg},
+            "messaging_type": "MESSAGE_TAG",
+            "tag": "ACCOUNT_UPDATE",
+        }
+        assert mock.last_request.json() == expected_body
+
+        expected_params = {"access_token": ["page-access-token"]}
+        assert mock.last_request.qs == expected_params
